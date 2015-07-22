@@ -1,93 +1,45 @@
-
 import cv2
 import numpy as np
 import os,sys
 import math as m
 
-def getMotion(filename, start, frames, psone):
+def processMovie(filename, start, frames, outputfilename):
     cap = cv2.VideoCapture(filename)
     cap.set(cv2.CAP_PROP_POS_FRAMES,start)
-
-    skip=1
-    largeSkip=60
-    if psone:
-        skip=largeSkip
-
-    prev = np.array([])
-    dx=0.0
-    dy=0.0
-    dth=0.0
-    global allTransforms
-    for tt in range(frames):
-        # Capture frame-by-frame
-        _, frame = cap.read()
-        if frame is None:
-            break
-        if (tt%skip)==0:
-            print(tt)
-            if not(prev.size):
-                prev = frame.copy()       
-            rigid_mat = cv2.estimateRigidTransform(frame, prev, False)
-            #rigid_mat2 = cv2.estimateRigidTransform(prev,frame, False)
-            prev = frame.copy()       
-            if rigid_mat is None:
-                continue
-            #dx+=0.5*(rigid_mat[0,2]-rigid_mat2[0,2])
-            dx+=rigid_mat[0,2]
-            #dy+=0.5*(rigid_mat[1,2]-rigid_mat2[1,2])
-            dy+=rigid_mat[1,2]
-            #dth+=0.5*(m.atan2(rigid_mat[1,0],rigid_mat[0,0])-m.atan2(rigid_mat2[1,0],rigid_mat2[0,0]))
-            dth+=m.atan2(rigid_mat[1,0],rigid_mat[0,0])
-            if not psone:
-                if (tt%largeSkip)==0:
-                    ddx = (dx-allTransforms[tt,0])
-                    ddy = (dy-allTransforms[tt,1])
-                    ddth = (dth-allTransforms[tt,2])
-                    for back in range(int(0.75*largeSkip)):
-                        allTransforms[tt-1-back,0]-=ddx*m.exp(-float(back)/(0.15*(float(largeSkip))))
-                        allTransforms[tt-1-back,1]-=ddy*m.exp(-float(back)/(0.15*(float(largeSkip))))
-                        allTransforms[tt-1-back,2]-=ddth*m.exp(-float(back)/(0.15*(float(largeSkip))))
-                    dx=allTransforms[tt,0]
-                    dy=allTransforms[tt,1]
-                    dth=allTransforms[tt,2]
-            allTransforms[tt,0]=dx
-            allTransforms[tt,1]=dy
-            allTransforms[tt,2]=dth
-    cap.release()
-
-def outputMovie(filename, outputfilename, start, frames):
-    cap = cv2.VideoCapture(filename)
-    cap.set(cv2.CAP_PROP_POS_FRAMES,start)
-
     S = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
     out = cv2.VideoWriter(outputfilename, cv2.VideoWriter_fourcc('M','J','P','G'), cap.get(cv2.CAP_PROP_FPS), S, True)
+ 
 
-    MC = np.zeros((2,3))
-  
-    global allTransforms
+    warp_mode = cv2.MOTION_EUCLIDEAN
+    warp_matrix = np.eye(2, 3, dtype=np.float32)
+    number_of_iterations = 200;
+     
+# Specify the threshold of the increment
+# in the correlation coefficient between two iterations
+    termination_eps = 1e-4;
+     
+# Define termination criteria
+    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, number_of_iterations,  termination_eps)
+     
+
+    im1_gray = np.array([])
+    first = np.array([])
     for tt in range(frames):
         # Capture frame-by-frame
         _, frame = cap.read()
-        if frame is None:
-            break
-        dx=allTransforms[tt,0]
-        dy=allTransforms[tt,1]
-        dth=allTransforms[tt,2]
-        MC[0,0]=m.cos(dth)
-        MC[0,1]=-m.sin(dth)
-        MC[1,0]=m.sin(dth)
-        MC[1,1]=m.cos(dth)
-        MC[0,2]=dx
-        MC[1,2]=dy
-        finalframe = cv2.warpAffine(frame,MC,S)#, cv2.WARP_INVERSE_MAP) 
-        finalframe[:,0:50,...]=0.0
-        finalframe[:,1870:,...]=0.0
-        finalframe[0:50,...]=0.0
-        finalframe[1030:,...]=0.0
-        out.write(finalframe)
-
-    # When everything done, release the capture
+        if not(im1_gray.size):
+            im1_gray = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
+            first = frame.copy()
+        im2_gray = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
+     
+        (cc, warp_matrix) = cv2.findTransformECC (im1_gray,im2_gray,warp_matrix, warp_mode, criteria)
+        im2_aligned = cv2.warpAffine(frame, warp_matrix, (S[0],S[1]), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP);
+     
+        gsout =  cv2.cvtColor(im2_aligned,cv2.COLOR_BGR2GRAY)
+        im2_aligned[gsout<100,:]=first[gsout<100,:]
+        out.write(im2_aligned)
     cap.release()
+    out.release()
 
 if __name__ == '__main__':
     FULLNAME = sys.argv[1]
@@ -97,8 +49,5 @@ if __name__ == '__main__':
     noext, ext = os.path.splitext(filename)
     allTransforms=np.zeros((frameLength,3))
     outputname = noext + '_FRW' + str(frameStart) + '.avi' 
-    getMotion(FULLNAME, frameStart, frameLength, True)
-    getMotion(FULLNAME, frameStart, frameLength, False)
-    outputMovie(FULLNAME, outputname, frameStart, frameLength)
+    processMovie(FULLNAME, frameStart, frameLength, outputname)
     print(outputname)
-
